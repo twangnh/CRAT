@@ -1,4 +1,4 @@
-This is implementation of CRAT, Cross-class gRAdient Transfusing for long-tailed object detection and instance segmentation.
+# This is implementation of CRAT, Cross-class gRAdient Transfusing for long-tailed object detection and instance segmentation.
 
 Learning object detectors under long-tailed data distribution is challenging and has been widely studied
 recently, the prior works mainly focus on balancing the learning signal of classification task such
@@ -17,7 +17,7 @@ and mask segmentation under long-tailed distribution. Our method improves the st
 long-tailed object detection and instance segmentation models with an average of 3.0 tail AP on the
 LVIS benchmark.
 
-Example Highly weighted sampled selected by CRAT:
+The Fisher gradient statistics on the task (regression/segmentation) layer are surprisingly effective at finding similar shape, appearance and context from the head classes for training the tail classes, here are some example highly weighted sampled selected by CRAT:
 
 ![image](https://user-images.githubusercontent.com/18298163/213604504-440c490f-2306-4ec1-9270-1f7d5e27a7af.png)
 ![image](https://user-images.githubusercontent.com/18298163/213604509-788b4397-6d30-4643-8426-4389e26cef70.png)
