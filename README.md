@@ -5,7 +5,7 @@ Updates:\
 [2023.01] uploading code with eqlv2\
 TODO:\
 integrating Groupsoftmax, Seesaw code and training configs\
-combining sampling implementation\
+combining sampling implementation
 
 Learning object detectors under long-tailed data distribution is challenging and has been widely studied
 recently, the prior works mainly focus on balancing the learning signal of classification task such
