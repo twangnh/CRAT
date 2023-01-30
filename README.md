@@ -1,5 +1,12 @@
 # This is implementation of CRAT, Cross-class gRAdient Transfusing for long-tailed object detection and instance segmentation.
 
+Updates:
+[2022.12] creating repository
+[2023.01] uploading code with eqlv2
+TODO:
+integrating Groupsoftmax, Seesaw code and training configs
+combining sampling implementation
+
 Learning object detectors under long-tailed data distribution is challenging and has been widely studied
 recently, the prior works mainly focus on balancing the learning signal of classification task such
 that samples from tail object classes are effectively recognized. However, the learning difficulty of
