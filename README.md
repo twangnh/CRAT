@@ -1,7 +1,7 @@
 # This is implementation of CRAT, Cross-class gRAdient Transfusing for long-tailed object detection and instance segmentation.
 
 Updates:\
-[2022.12] creating repository\
+[2022.12] initial commit\
 [2023.01] uploading code with eqlv2\
 TODO:\
 integrating Groupsoftmax, Seesaw code and training configs\
