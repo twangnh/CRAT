@@ -26,6 +26,65 @@ LVIS benchmark.
 
 The Fisher gradient statistics on the task (regression/segmentation) layer are surprisingly effective at finding similar shape, appearance and context from the head classes for training the tail classes, here are some example highly weighted sampled selected by CRAT:
 
+## Prepare LVIS Dataset
+
+***for images***
+
+LVIS uses same images as COCO's, so you need to donwload COCO dataset at folder ($COCO), and link those `train`, `val` under folder `lvis`($LVIS).
+
+```
+mkdir -p data/lvis
+ln -s $COCO/train $LVIS
+ln -s $COCO/val $LVIS
+ln -s $COCO/test $LVIS
+```
+***for annotations***
+
+Download the annotations from [lvis webset](https://lvisdataset.org/)
+
+```
+cd $LVIS
+mkdir annotations
+```
+then places the annotations at folder ($LVIS/annotations)
+
+Finally you will have the file structure like below:
+
+    data
+      ├── lvis
+      |   ├── annotations
+      │   │   │   ├── lvis_v1_val.json
+      │   │   │   ├── lvis_v1_train.json
+      │   ├── train2017
+      │   │   ├── 000000004134.png
+      │   │   ├── 000000031817.png
+      │   │   ├── ......
+      │   ├── val2017
+      │   ├── test2017
+
+***for API***
+
+The official lvis-api and mmlvis can lead to some bugs of multiprocess. See [issue](https://github.com/open-mmlab/mmdetection/issues/4112)
+
+So you can install this LVIS API from my modified repo.
+```
+pip install git+https://github.com/tztztztztz/lvis-api.git
+```
+
+## Testing with pretrain_models
+```bash
+# ./tools/dist_test.sh ${CONFIG} ${CHECKPOINT} ${GPU_NUM} [--out ${RESULT_FILE}] [--eval ${EVAL_METRICS}]
+./tools/dist_test.sh configs/eqlv2/eql_r50_8x2_1x.py data/pretrain_models/eql_r50_8x2_1x.pth 8 --out results.pkl --eval bbox segm
+```
+
+
+## Training
+
+```bash
+# ./tools/dist_train.sh ${CONFIG} ${GPU_NUM}
+./tools/dist_train.sh ./configs/end2end/eql_r50_8x2_1x.py 8 
+```
+
 ![image](https://user-images.githubusercontent.com/18298163/213604504-440c490f-2306-4ec1-9270-1f7d5e27a7af.png)
 ![image](https://user-images.githubusercontent.com/18298163/213604509-788b4397-6d30-4643-8426-4389e26cef70.png)
 
