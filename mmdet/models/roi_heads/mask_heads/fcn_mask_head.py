@@ -118,6 +118,12 @@ class FCNMaskHead(BaseModule):
         self.relu = nn.ReLU(inplace=True)
         self.debug_imgs = None
 
+        #TODO: replace 1024 with variable
+        self.fisher_box_layer = nn.Parameter(torch.zeros(num_classes, 256), requires_grad=False)
+        self.grad_box_layer = nn.Parameter(torch.zeros(num_classes, 256), requires_grad=False)
+        self.alpha = 0.01
+
+
     def init_weights(self) -> None:
         """Initialize the weights."""
         super().init_weights()
@@ -178,7 +184,8 @@ class FCNMaskHead(BaseModule):
     def loss_and_target(self, mask_preds: Tensor,
                         sampling_results: List[SamplingResult],
                         batch_gt_instances: InstanceList,
-                        rcnn_train_cfg: ConfigDict) -> dict:
+                        rcnn_train_cfg: ConfigDict,
+                        f_n_i_norm) -> dict:
         """Calculate the loss based on the features extracted by the mask head.
 
         Args:
@@ -212,8 +219,125 @@ class FCNMaskHead(BaseModule):
                 loss_mask = self.loss_mask(mask_preds, mask_targets,
                                            pos_labels)
         loss['loss_mask'] = loss_mask
+
+        pos_inds=None
+        avg_factor=1.
+        self.update_representations(loss['loss_mask'], mask_preds, pos_labels, pos_inds)
+        loss_trans = self.compute_loss_trans(mask_preds, mask_targets, pos_labels, pos_inds, avg_factor, f_n_i_norm)
+        loss['loss_mask_trans'] = 0.01 * loss_trans
+
+
         # TODO: which algorithm requires mask_targets?
         return dict(loss_mask=loss, mask_targets=mask_targets)
+
+    def compute_loss_trans(self, mask_pred, mask_targets, labels, pos_inds, avg_factor, f_n_i_norm):
+
+        def class_excluding_softmax(matrix, labels, temperature=1.0):
+            N, C = matrix.size()
+
+            # Create a mask to exclude the ground truth class for each sample
+            mask = torch.ones(N, C, dtype=torch.bool).to(matrix.device)
+            mask[torch.arange(N), labels] = 0
+
+            # Apply the mask to get the scores for the remaining C-1 classes
+            masked_matrix = matrix[mask].view(N, C - 1)
+
+            # Apply temperature scaling
+            scaled_matrix = masked_matrix / temperature
+
+            # Compute the softmax over the remaining C-1 classes
+            softmax_output = torch.nn.functional.softmax(scaled_matrix, dim=1)
+
+            # Create the final output tensor and fill in the softmax values
+            output = torch.zeros(N, C).to(matrix.device)
+            output[mask] = softmax_output.view(-1)
+
+            return output
+
+        loss_mask_full = F.binary_cross_entropy_with_logits(mask_pred, mask_targets.unsqueeze(1).repeat(1, mask_pred.size(1), 1, 1), reduction="none")
+        loss_mask_full = loss_mask_full.mean(-1).mean(-1)
+
+        # num_rois = mask_pred.size()[0]
+        # inds = torch.arange(0, num_rois, dtype=torch.long, device=mask_pred.device)
+        # pred_slice = mask_pred[inds, labels].squeeze(1)
+        # loss_mask = F.binary_cross_entropy_with_logits(pred_slice, mask_targets, reduction='none')
+        # loss_mask = loss_mask.mean(-1).mean(-1)
+        #
+        # F_n = []
+        # for i in range(len(loss_mask)):
+        #     grad_persample = torch.autograd.grad(loss_mask[i], self.conv_logits.weight, retain_graph=True)[0]
+        #     F_n.append(grad_persample[labels[i]].squeeze(-1).squeeze(-1))
+        # F_n = torch.stack(F_n)
+        # F_n = F_n ** 2
+        # # f_n_i = torch.matmul(F_n, self.fisher_box_layer.transpose(0, 1))
+        # # f_n_i = class_excluding_softmax(f_n_i, labels)
+        #
+        # F_n_normalized = torch.nn.functional.normalize(F_n, dim=-1)
+        # fisher_box_layer_normalized = torch.nn.functional.normalize(self.fisher_box_layer.transpose(0, 1), dim=0)
+        # f_n_i_norm = torch.matmul(F_n_normalized, fisher_box_layer_normalized)
+        # f_n_i_norm = class_excluding_softmax(f_n_i_norm, labels)
+        #
+        # updated_fisher_mask = (self.fisher_box_layer.sum(-1)!=0).float().unsqueeze(0)
+        # loss_trans = updated_fisher_mask.detach() * f_n_i_norm.detach() * loss_mask_full
+
+        loss_trans = f_n_i_norm * loss_mask_full
+        return loss_trans.sum()
+        # return loss_mask_full.mean(-1).sum()
+
+    def update_grad(self, input_representation, labels):
+        with torch.no_grad():  # Disable gradient calculation
+            # Initialize a tensor to store the summed representation for each class
+            summed_representation = torch.zeros_like(self.fisher_box_layer)
+
+            # Use index_add_ to sum the representations for each class
+            summed_representation.index_add_(0, labels, input_representation)
+
+            # Count the number of samples for each class
+            counts = torch.bincount(labels, minlength=self.fisher_box_layer.shape[0])
+
+            # Avoid division by zero
+            counts[counts == 0] = 1
+
+            # Calculate the average representation for each class
+            avg_representation = summed_representation / counts[:, None]
+
+            # Update the Grad
+            self.grad_box_layer.mul_(1 - self.alpha).add_(self.alpha * avg_representation)
+
+    def update_fisher(self, input_representation, labels):
+        with torch.no_grad():  # Disable gradient calculation
+            #compute diagnoal fisher:
+            input_representation = input_representation ** 2
+
+            # Initialize a tensor to store the summed representation for each class
+            summed_representation = torch.zeros_like(self.fisher_box_layer)
+
+            # Use index_add_ to sum the representations for each class
+            summed_representation.index_add_(0, labels, input_representation)
+
+            # Count the number of samples for each class
+            counts = torch.bincount(labels, minlength=self.fisher_box_layer.shape[0])
+
+            # Avoid division by zero
+            counts[counts == 0] = 1
+
+            # Calculate the average representation for each class
+            avg_representation = summed_representation / counts[:, None]
+
+            # Update the Fisher representation
+            # self.fisher_box_layer.mul_(1 - self.alpha).add_(self.alpha * avg_representation)
+            self.fisher_box_layer[labels] = self.fisher_box_layer[labels].mul_(1 - self.alpha).add_(
+                self.alpha * avg_representation[labels])
+    def update_representations(self, loss_bbox, bbox_pred, labels, pos_inds):
+        with torch.no_grad():
+            grad_w = torch.autograd.grad(loss_bbox, self.conv_logits.weight, retain_graph=True)[0]
+            grad_w = grad_w[:, :, 0, 0]
+            pos_grad_w = grad_w[labels]
+
+            # self.update_grad(pos_grad_w, labels)
+            self.update_fisher(pos_grad_w, labels)
+
+        return pos_grad_w
 
     def predict_by_feat(self,
                         mask_preds: Tuple[Tensor],

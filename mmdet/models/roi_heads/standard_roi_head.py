@@ -12,6 +12,7 @@ from ..task_modules.samplers import SamplingResult
 from ..utils import empty_instances, unpack_gt_instances
 from .base_roi_head import BaseRoIHead
 
+from mmdet.datasets.lvis import LVISV1Dataset
 
 @MODELS.register_module()
 class StandardRoIHead(BaseRoIHead):
@@ -81,7 +82,7 @@ class StandardRoIHead(BaseRoIHead):
         rois = bbox2roi(proposals)
         # bbox head
         if self.with_bbox:
-            bbox_results = self._bbox_forward(x, rois)
+            bbox_results, f_n_i_norm = self._bbox_forward(x, rois)
             results = results + (bbox_results['cls_score'],
                                  bbox_results['bbox_pred'])
         # mask head
@@ -132,14 +133,14 @@ class StandardRoIHead(BaseRoIHead):
         losses = dict()
         # bbox head loss
         if self.with_bbox:
-            bbox_results = self.bbox_loss(x, sampling_results)
+            bbox_results, f_n_i_norm = self.bbox_loss(x, sampling_results)
             losses.update(bbox_results['loss_bbox'])
 
         # mask head forward and loss
         if self.with_mask:
             mask_results = self.mask_loss(x, sampling_results,
                                           bbox_results['bbox_feats'],
-                                          batch_gt_instances)
+                                          batch_gt_instances, f_n_i_norm)
             losses.update(mask_results['loss_mask'])
 
         return losses
@@ -190,7 +191,7 @@ class StandardRoIHead(BaseRoIHead):
         rois = bbox2roi([res.priors for res in sampling_results])
         bbox_results = self._bbox_forward(x, rois)
 
-        bbox_loss_and_target = self.bbox_head.loss_and_target(
+        bbox_loss_and_target, f_n_i_norm = self.bbox_head.loss_and_target(
             cls_score=bbox_results['cls_score'],
             bbox_pred=bbox_results['bbox_pred'],
             rois=rois,
@@ -198,11 +199,12 @@ class StandardRoIHead(BaseRoIHead):
             rcnn_train_cfg=self.train_cfg)
 
         bbox_results.update(loss_bbox=bbox_loss_and_target['loss_bbox'])
-        return bbox_results
+        return bbox_results, f_n_i_norm
 
     def mask_loss(self, x: Tuple[Tensor],
                   sampling_results: List[SamplingResult], bbox_feats: Tensor,
-                  batch_gt_instances: InstanceList) -> dict:
+                  batch_gt_instances: InstanceList,
+                  f_n_i_norm) -> dict:
         """Perform forward propagation and loss calculation of the mask head on
         the features of the upstream network.
 
@@ -249,7 +251,8 @@ class StandardRoIHead(BaseRoIHead):
             mask_preds=mask_results['mask_preds'],
             sampling_results=sampling_results,
             batch_gt_instances=batch_gt_instances,
-            rcnn_train_cfg=self.train_cfg)
+            rcnn_train_cfg=self.train_cfg,
+            f_n_i_norm=f_n_i_norm)
 
         mask_results.update(loss_mask=mask_loss_and_target['loss_mask'])
         return mask_results

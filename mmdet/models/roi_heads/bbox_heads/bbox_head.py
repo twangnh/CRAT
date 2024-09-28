@@ -105,6 +105,11 @@ class BBoxHead(BaseModule):
                         type='Normal', std=0.001, override=dict(name='fc_reg'))
                 ]
 
+        #TODO: replace 1024 with variable
+        self.fisher_box_layer = nn.Parameter(torch.zeros(num_classes, 1024 * 4), requires_grad=False)
+        self.grad_box_layer = nn.Parameter(torch.zeros(num_classes, 1024 * 4), requires_grad=False)
+        self.alpha = 0.01
+
     # TODO: Create a SeasawBBoxHead to simplified logic in BBoxHead
     @property
     def custom_cls_channels(self) -> bool:
@@ -320,7 +325,7 @@ class BBoxHead(BaseModule):
 
         cls_reg_targets = self.get_targets(
             sampling_results, rcnn_train_cfg, concat=concat)
-        losses = self.loss(
+        losses, f_n_i_norm = self.loss(
             cls_score,
             bbox_pred,
             rois,
@@ -328,7 +333,7 @@ class BBoxHead(BaseModule):
             reduction_override=reduction_override)
 
         # cls_reg_targets is only for cascade rcnn
-        return dict(loss_bbox=losses, bbox_targets=cls_reg_targets)
+        return dict(loss_bbox=losses, bbox_targets=cls_reg_targets), f_n_i_norm
 
     def loss(self,
              cls_score: Tensor,
@@ -417,10 +422,137 @@ class BBoxHead(BaseModule):
                     bbox_weights[pos_inds.type(torch.bool)],
                     avg_factor=bbox_targets.size(0),
                     reduction_override=reduction_override)
+
+                self.update_representations(losses['loss_bbox'], bbox_pred, labels, pos_inds)
+                loss_trans, f_n_i_norm = self.compute_loss_trans(bbox_pred, bbox_targets, labels, pos_inds, avg_factor)
+                losses['loss_bbox_trans'] = 0.001 * loss_trans
+
             else:
                 losses['loss_bbox'] = bbox_pred[pos_inds].sum()
 
-        return losses
+        return losses, f_n_i_norm
+
+    def compute_loss_trans(self, bbox_pred, bbox_targets, labels, pos_inds, avg_factor):
+
+        def class_excluding_softmax(matrix, labels, temperature=1e-1):
+            N, C = matrix.size()
+
+            # Create a mask to exclude the ground truth class for each sample
+            mask = torch.ones(N, C, dtype=torch.bool).to(matrix.device)
+            mask[torch.arange(N), labels] = 0
+
+            # Apply the mask to get the scores for the remaining C-1 classes
+            masked_matrix = matrix[mask].view(N, C - 1)
+
+            # Apply temperature scaling
+            scaled_matrix = masked_matrix / temperature
+
+            # Compute the softmax over the remaining C-1 classes
+            softmax_output = torch.nn.functional.softmax(scaled_matrix, dim=1)
+
+            # Create the final output tensor and fill in the softmax values
+            output = torch.zeros(N, C).to(matrix.device)
+            output[mask] = softmax_output.view(-1)
+
+            return output
+
+        pos_bbox_pred_all = bbox_pred.view(bbox_pred.size(0), -1, 4)[pos_inds.type(torch.bool)]
+        loss_bbox_full = torch.abs(pos_bbox_pred_all - bbox_targets[pos_inds.type(torch.bool)].unsqueeze(1))
+        # loss_bbox_full = loss_bbox_full.sum(-1).sum(-1) / avg_factor
+
+        pos_bbox_pred = bbox_pred.view(bbox_pred.size(0), -1, 4)[pos_inds.type(torch.bool), labels[pos_inds.type(torch.bool)]]
+        loss_bbox = torch.abs(pos_bbox_pred - bbox_targets[pos_inds.type(torch.bool)])
+        loss_bbox = loss_bbox.sum(-1) / avg_factor
+
+        # F_n = []
+        # for i in range(len(loss_bbox)):
+        #     grad_persample = torch.autograd.grad(loss_bbox[i], self.fc_reg.weight, retain_graph=True)[0]
+        #     F_n.append(grad_persample.t().view(grad_persample.size(1), -1, 4)[:, labels[pos_inds.type(torch.bool)][i], :].contiguous().view(-1))
+        # F_n = torch.stack(F_n)
+        # F_n = F_n**2
+
+        grad_persample = torch.autograd.grad(loss_bbox[0], self.fc_reg.weight, retain_graph=True)[0]
+        F_n = grad_persample.t().view(grad_persample.size(1), -1, 4)[:, labels[pos_inds.type(torch.bool)][0], :].contiguous().view(-1)
+        F_n = F_n.unsqueeze(0).expand(len(loss_bbox), -1)
+
+        # f_n_i = torch.matmul(F_n, self.fisher_box_layer.transpose(0, 1))
+        # f_n_i = class_excluding_softmax(f_n_i, labels[pos_inds.type(torch.bool)])
+        # print((f_n_i.max(-1)[0]).mean())
+        # print(f_n_i.max())
+        F_n_normalized = torch.nn.functional.normalize(F_n, dim=-1)
+        fisher_box_layer_normalized = torch.nn.functional.normalize(self.fisher_box_layer.transpose(0, 1), dim=0)
+        f_n_i_norm = torch.matmul(F_n_normalized, fisher_box_layer_normalized)
+        # f_n_i_norm = class_excluding_softmax(f_n_i_norm, labels[pos_inds.type(torch.bool)],temperature=0.04)
+        f_n_i_norm = class_excluding_softmax(f_n_i_norm, labels[pos_inds.type(torch.bool)],temperature=5e-2)
+        # print(f_n_i_norm.max())
+
+        updated_fisher_mask = (self.fisher_box_layer.sum(-1)!=0).float().unsqueeze(0)
+        # ignore_mask = f_n_i_norm.max(-1)[0]<0.1
+        # f_n_i_norm[ignore_mask] *= 0
+        loss_trans = updated_fisher_mask.detach() * f_n_i_norm.detach() * loss_bbox_full.sum(-1)
+
+        # loss_trans = torch.ones(loss_bbox_full.shape[:2]).to(loss_bbox_full.device).softmax(-1) * loss_bbox_full.sum(-1)
+        return loss_trans.sum(), f_n_i_norm
+
+
+
+    def update_grad(self, input_representation, labels):
+        with torch.no_grad():  # Disable gradient calculation
+            # Initialize a tensor to store the summed representation for each class
+            summed_representation = torch.zeros_like(self.fisher_box_layer)
+
+            # Use index_add_ to sum the representations for each class
+            summed_representation.index_add_(0, labels, input_representation)
+
+            # Count the number of samples for each class
+            counts = torch.bincount(labels, minlength=self.fisher_box_layer.shape[0])
+
+            # Avoid division by zero
+            counts[counts == 0] = 1
+
+            # Calculate the average representation for each class
+            avg_representation = summed_representation / counts[:, None]
+
+            # Update the Grad
+            self.grad_box_layer.mul_(1 - self.alpha).add_(self.alpha * avg_representation)
+
+    def update_fisher(self, input_representation, labels):
+        with torch.no_grad():  # Disable gradient calculation
+            #compute diagnoal fisher:
+            input_representation = input_representation ** 2
+
+            # Initialize a tensor to store the summed representation for each class
+            summed_representation = torch.zeros_like(self.fisher_box_layer)
+
+            # Use index_add_ to sum the representations for each class
+            summed_representation.index_add_(0, labels, input_representation)
+
+            # Count the number of samples for each class
+            counts = torch.bincount(labels, minlength=self.fisher_box_layer.shape[0])
+
+            # Avoid division by zero
+            counts[counts == 0] = 1
+
+            # Calculate the average representation for each class
+            avg_representation = summed_representation / counts[:, None]
+
+            # Update the Fisher representation
+            self.fisher_box_layer[labels] = self.fisher_box_layer[labels].mul_(1 - self.alpha).add_(
+                self.alpha * avg_representation[labels])
+            # self.fisher_box_layer.mul_(1 - self.alpha).add_(self.alpha * avg_representation)
+
+    def update_representations(self, loss_bbox, bbox_pred, labels, pos_inds):
+        with torch.no_grad():
+            grad_w = torch.autograd.grad(loss_bbox, self.fc_reg.weight, retain_graph=True)[0]
+            _, C = grad_w.shape
+            pos_grad_w = grad_w.t().view(C, -1, 4)[:, labels[pos_inds.type(torch.bool)], :]
+            C, pos_N, _ = pos_grad_w.shape
+            pos_grad_w = pos_grad_w.transpose(0, 1).reshape(pos_N, -1)
+
+            # self.update_grad(pos_grad_w, labels[pos_inds.type(torch.bool)])
+            self.update_fisher(pos_grad_w, labels[pos_inds.type(torch.bool)])
+
+        return pos_grad_w
 
     def predict_by_feat(self,
                         rois: Tuple[Tensor],
