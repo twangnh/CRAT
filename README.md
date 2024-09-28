@@ -1,7 +1,6 @@
 # This is implementation of CRAT, Cross-class gRAdient Transfusing for long-tailed object detection and instance segmentation.
 
-Updates:
-integrate CRAT with EQLv2
+### Note : This is example implementation with EQLv2, the main implementation of CRAT is at [this commit](https://github.com/twangnh/CRAT/commit/8f892a04ca08d1c018911d5cb888b36fe4847220)
 
 TODO:\
 integrating Groupsoftmax, Seesaw code and training configs\
@@ -88,3 +87,7 @@ pip install git+https://github.com/tztztztztz/lvis-api.git
 ![image](https://user-images.githubusercontent.com/18298163/213604504-440c490f-2306-4ec1-9270-1f7d5e27a7af.png)
 ![image](https://user-images.githubusercontent.com/18298163/213604509-788b4397-6d30-4643-8426-4389e26cef70.png)
 
+=======
+![image](https://user-images.githubusercontent.com/18298163/213604504-440c490f-2306-4ec1-9270-1f7d5e27a7af.png)
+![image](https://user-images.githubusercontent.com/18298163/213604509-788b4397-6d30-4643-8426-4389e26cef70.png)
+>>>>>>> c7a0f24d8d5ea5eb1c773882aef4df4c6025f0a1
