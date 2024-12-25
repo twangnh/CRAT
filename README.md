@@ -87,7 +87,4 @@ pip install git+https://github.com/tztztztztz/lvis-api.git
 ![image](https://user-images.githubusercontent.com/18298163/213604504-440c490f-2306-4ec1-9270-1f7d5e27a7af.png)
 ![image](https://user-images.githubusercontent.com/18298163/213604509-788b4397-6d30-4643-8426-4389e26cef70.png)
 
-=======
-![image](https://user-images.githubusercontent.com/18298163/213604504-440c490f-2306-4ec1-9270-1f7d5e27a7af.png)
-![image](https://user-images.githubusercontent.com/18298163/213604509-788b4397-6d30-4643-8426-4389e26cef70.png)
->>>>>>> c7a0f24d8d5ea5eb1c773882aef4df4c6025f0a1
+
